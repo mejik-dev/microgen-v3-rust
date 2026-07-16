@@ -1,8 +1,9 @@
-use crate::error::{MicrogenError, Result};
+use crate::error::{check_status, MicrogenError, Result};
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
 
 /// Authentication client – login, register, social auth, password management.
+#[derive(Debug, Clone)]
 pub struct AuthClient {
     client: reqwest::Client,
     base_url: String,
@@ -27,25 +28,27 @@ impl AuthClient {
     fn auth_header(&self) -> Option<String> {
         self.token
             .lock()
-            .ok()
-            .and_then(|t| t.clone().map(|v| format!("Bearer {}", v)))
+            .unwrap()
+            .clone()
+            .map(|v| format!("Bearer {v}"))
     }
 
     fn set_token(&self, token: String) {
-        if let Ok(mut t) = self.token.lock() {
-            *t = Some(token);
-        }
+        *self.token.lock().unwrap() = Some(token);
     }
 
     fn clear_token(&self) {
-        if let Ok(mut t) = self.token.lock() {
-            *t = None;
-        }
+        *self.token.lock().unwrap() = None;
     }
 
     /// Return the current bearer token, if any.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal token mutex is poisoned (indicates a prior panic while holding the lock).
+    #[must_use]
     pub fn token(&self) -> Option<String> {
-        self.token.lock().ok().and_then(|t| t.clone())
+        self.token.lock().unwrap().clone()
     }
 
     /// Persist a token (called externally e.g. after restoring from storage).
@@ -53,19 +56,18 @@ impl AuthClient {
         self.set_token(token);
     }
 
-    async fn post_json<B: Serialize + ?Sized, R: serde::de::DeserializeOwned>(
+    async fn post_json<B: Serialize + Sync + ?Sized, R: serde::de::DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<R> {
         let url = format!("{}{}", self.base_url, path);
-        eprintln!("DEBUG [microgen-sdk] post_json URL: {url}");
         let resp = self.client.post(&url).json(body).send().await?;
         let resp = check_status(resp).await?;
         Ok(resp.json().await?)
     }
 
-    async fn post_auth_json<B: Serialize + ?Sized, R: serde::de::DeserializeOwned>(
+    async fn post_auth_json<B: Serialize + Sync + ?Sized, R: serde::de::DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
@@ -103,7 +105,7 @@ impl AuthClient {
         Ok(resp.json().await?)
     }
 
-    async fn patch_auth<B: Serialize + ?Sized, R: serde::de::DeserializeOwned>(
+    async fn patch_auth<B: Serialize + Sync + ?Sized, R: serde::de::DeserializeOwned>(
         &self,
         path: &str,
         body: &B,
@@ -121,28 +123,44 @@ impl AuthClient {
     // ── public API ───────────────────────────────────────
 
     /// Register a new user.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn register<T: serde::de::DeserializeOwned>(
         &self,
         body: &serde_json::Value,
     ) -> Result<crate::types::TokenResponse<T>> {
-        let tr: crate::types::TokenResponse<T> =
-            self.post_json("/auth/register", body).await?;
+        let tr: crate::types::TokenResponse<T> = self.post_json("/auth/register", body).await?;
         self.set_token(tr.token.clone());
         Ok(tr)
     }
 
     /// Login with email + password.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn login<T: serde::de::DeserializeOwned>(
         &self,
         body: &serde_json::Value,
     ) -> Result<crate::types::TokenResponse<T>> {
-        let tr: crate::types::TokenResponse<T> =
-            self.post_json("/auth/login", body).await?;
+        let tr: crate::types::TokenResponse<T> = self.post_json("/auth/login", body).await?;
         self.set_token(tr.token.clone());
         Ok(tr)
     }
 
     /// Get the current user profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn user<T: serde::de::DeserializeOwned>(
         &self,
         option: Option<&crate::types::GetUserOption>,
@@ -159,6 +177,12 @@ impl AuthClient {
     }
 
     /// Update the current user profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn update<T: serde::de::DeserializeOwned>(
         &self,
         body: &serde_json::Value,
@@ -167,17 +191,29 @@ impl AuthClient {
     }
 
     /// Logout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn logout<T: serde::de::DeserializeOwned>(
         &self,
     ) -> Result<crate::types::TokenResponse<T>> {
-        let tr: crate::types::TokenResponse<T> =
-            self.post_auth_json("/auth/logout", &serde_json::json!({}))
-                .await?;
+        let tr: crate::types::TokenResponse<T> = self
+            .post_auth_json("/auth/logout", &serde_json::json!({}))
+            .await?;
         self.clear_token();
         Ok(tr)
     }
 
     /// Verify the current (or provided) token is still valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn verify_token<T: serde::de::DeserializeOwned>(
         &self,
     ) -> Result<crate::types::TokenResponse<T>> {
@@ -186,15 +222,26 @@ impl AuthClient {
     }
 
     /// Change password.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn change_password(
         &self,
         body: &serde_json::Value,
     ) -> Result<crate::types::ChangePasswordResponse> {
-        self.post_auth_json("/auth/change-password", body)
-            .await
+        self.post_auth_json("/auth/change-password", body).await
     }
 
     /// Begin a Regol QR handshake.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn login_with_regol_qr(
         &self,
         body: &serde_json::Value,
@@ -203,17 +250,28 @@ impl AuthClient {
     }
 
     /// Login with a Google identity token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn login_with_google<T: serde::de::DeserializeOwned>(
         &self,
         body: &serde_json::Value,
     ) -> Result<crate::types::TokenResponse<T>> {
-        let tr: crate::types::TokenResponse<T> =
-            self.post_json("/auth/login/google", body).await?;
+        let tr: crate::types::TokenResponse<T> = self.post_json("/auth/login/google", body).await?;
         self.set_token(tr.token.clone());
         Ok(tr)
     }
 
     /// Login with a Facebook access token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn login_with_facebook<T: serde::de::DeserializeOwned>(
         &self,
         body: &serde_json::Value,
@@ -223,23 +281,4 @@ impl AuthClient {
         self.set_token(tr.token.clone());
         Ok(tr)
     }
-}
-
-// ── HTTP status check ─────────────────────────
-
-pub(crate) async fn check_status(
-    resp: reqwest::Response,
-) -> Result<reqwest::Response> {
-    let status = resp.status();
-    if !status.is_success() {
-        let status_code = status.as_u16();
-        let reason = status.canonical_reason().unwrap_or("Unknown").to_string();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(MicrogenError::Api {
-            status: status_code,
-            message: reason,
-            body,
-        });
-    }
-    Ok(resp)
 }

@@ -1,6 +1,6 @@
 use microgen_v3_sdk_rust::{
-    types::{CountOption, FieldFilter, FindOption, WhereClause, WhereValue},
-    MicrogenClient, MicrogenClientOptions,
+    CountOption, FieldFilter, FindOption, MicrogenClient, MicrogenClientOptions, WhereClause,
+    WhereValue,
 };
 
 const API_KEY: &str = "API_KEY";
@@ -9,13 +9,9 @@ const TABLE: &str = "Products";
 // ── Helpers ─────────────────────────────────────
 
 fn client() -> MicrogenClient {
-    MicrogenClient::new(MicrogenClientOptions {
-        api_key: API_KEY.to_string(),
-        query_url: Some("https://database-query.v3.microgen.id/api/v1/".into()),
-        stream_url: None,
-        host: None,
-        is_secure: None,
-    })
+    let mut opts = MicrogenClientOptions::new(API_KEY);
+    opts.query_url = Some("https://database-query.v3.microgen.id/api/v1/".into());
+    MicrogenClient::new(opts).expect("valid API key should create client")
 }
 
 fn ts() -> String {
@@ -29,7 +25,7 @@ fn ts() -> String {
 /// Register a fresh user, then login to get a fresh token, and return it.
 async fn register_then_login(mg: &MicrogenClient) -> String {
     let suffix = &ts()[..12];
-    let email = format!("rust-sdk-{}@example.com", suffix);
+    let email = format!("rust-sdk-{suffix}@example.com");
     let password = "TestPass123!";
 
     // 1. Register
@@ -42,7 +38,7 @@ async fn register_then_login(mg: &MicrogenClient) -> String {
         }))
         .await
         .expect("register should succeed");
-    println!("  → registered {}", email);
+    println!("  → registered {email}");
 
     // 2. Login to obtain a fresh token
     let login = mg
@@ -81,7 +77,7 @@ fn new_product() -> serde_json::Value {
 //  Auth — register & token
 // ──────────────────────────────────────────────
 
-#[ignore]
+#[ignore = "requires running Microgen API instance"]
 #[tokio::test]
 async fn test_auth_register_and_token() {
     let mg = client();
@@ -116,7 +112,7 @@ async fn test_auth_register_and_token() {
 //  Find (public read access)
 // ──────────────────────────────────────────────
 
-#[ignore]
+#[ignore = "requires running Microgen API instance"]
 #[tokio::test]
 async fn test_products_find_public() {
     let mg = client();
@@ -126,16 +122,19 @@ async fn test_products_find_public() {
         .find::<serde_json::Value>(None, None)
         .await
         .expect("public find should succeed");
-    let count = resp.data.as_ref().map_or(0, |d| d.len());
-    println!("✅ public find returned {} Products", count);
-    println!("   pagination: limit={:?}, skip={:?}", resp.limit, resp.skip);
+    let count = resp.data.as_ref().map_or(0, Vec::len);
+    println!("✅ public find returned {count} Products");
+    println!(
+        "   pagination: limit={:?}, skip={:?}",
+        resp.limit, resp.skip
+    );
 }
 
 // ──────────────────────────────────────────────
 //  Full CRUD — authenticated
 // ──────────────────────────────────────────────
 
-#[ignore]
+#[ignore = "requires running Microgen API instance"]
 #[tokio::test]
 async fn test_products_crud_authenticated() {
     let mg = client();
@@ -154,7 +153,7 @@ async fn test_products_crud_authenticated() {
         .as_str()
         .expect("created record should have _id")
         .to_string();
-    println!("✅ created product id={}", id);
+    println!("✅ created product id={id}");
 
     // ── Get by ID ──
     let fetched = svc
@@ -178,7 +177,7 @@ async fn test_products_crud_authenticated() {
         )
         .await
         .expect("find with filter should succeed");
-    assert_eq!(found.data.as_ref().map_or(0, |d| d.len()), 1);
+    assert_eq!(found.data.as_ref().map_or(0, Vec::len), 1);
     println!("✅ find with _id filter: 1 record");
 
     // ── Update ──
@@ -217,11 +216,13 @@ async fn test_products_crud_authenticated() {
     );
 
     // ── Verify deletion ──
-    let after_del = svc.get_by_id::<serde_json::Value>(&id, None, Some(&token)).await;
+    let after_del = svc
+        .get_by_id::<serde_json::Value>(&id, None, Some(&token))
+        .await;
     match after_del {
         Ok(r) if r.data.is_some() => println!("  → getById after delete: {:?}", r.data),
         Ok(_) => println!("  → getById after delete: null (ok)"),
-        Err(e) => println!("  → getById after delete: {} (expected)", e),
+        Err(e) => println!("  → getById after delete: {e} (expected)"),
     }
     println!("✅ full CRUD cycle complete (token attached to every call)");
 }
@@ -230,7 +231,7 @@ async fn test_products_crud_authenticated() {
 //  Find with filters (public read + auth create)
 // ──────────────────────────────────────────────
 
-#[ignore]
+#[ignore = "requires running Microgen API instance"]
 #[tokio::test]
 async fn test_products_find_filters() {
     let mg = client();
@@ -272,7 +273,7 @@ async fn test_products_find_filters() {
         .expect("find with limit should succeed");
     println!(
         "✅ limit=2 → {} records (limit={:?})",
-        paginated.data.as_ref().map_or(0, |d| d.len()),
+        paginated.data.as_ref().map_or(0, Vec::len),
         paginated.limit,
     );
 
@@ -298,7 +299,7 @@ async fn test_products_find_filters() {
         .expect("find with $ne should succeed");
     println!(
         "✅ $ne filter → {} records",
-        filtered.data.as_ref().map_or(0, |d| d.len())
+        filtered.data.as_ref().map_or(0, Vec::len)
     );
 
     // $select (public read)
@@ -335,16 +336,16 @@ async fn test_products_find_filters() {
 //  Count (public GET endpoint)
 // ──────────────────────────────────────────────
 
-#[ignore]
+#[ignore = "requires running Microgen API instance"]
 #[tokio::test]
 async fn test_products_count() {
     let mg = client();
     let svc = mg.service(TABLE);
 
     let count_resp = svc.count(None, None).await.expect("count should succeed");
-    let count = count_resp.data.as_ref().map(|c| c.count).unwrap_or(0);
-    println!("✅ total Products count: {}", count);
-    assert!(count >= 0, "count should be non-negative");
+    let count = count_resp.data.as_ref().map_or(0, |c| c.count);
+    println!("✅ total Products count: {count}");
+    assert!(count > 0, "count should be positive");
 
     // Count with filter
     let mut where_clause = WhereClause::new();
@@ -365,15 +366,15 @@ async fn test_products_count() {
         )
         .await
         .expect("count with filter should succeed");
-    let filtered_count = filtered.data.as_ref().map(|c| c.count).unwrap_or(0);
-    println!("✅ filtered count ($ne 'nonexistent'): {}", filtered_count);
+    let filtered_count = filtered.data.as_ref().map_or(0, |c| c.count);
+    println!("✅ filtered count ($ne 'nonexistent'): {filtered_count}");
 }
 
 // ──────────────────────────────────────────────
 //  Bulk operations (authenticated)
 // ──────────────────────────────────────────────
 
-#[ignore]
+#[ignore = "requires running Microgen API instance"]
 #[tokio::test]
 async fn test_products_bulk() {
     let mg = client();
@@ -404,13 +405,13 @@ async fn test_products_bulk() {
         .iter()
         .map(|id| serde_json::json!({ "_id": id, "status": "Done" }))
         .collect();
-    let updated = svc
+    let updated_resp = svc
         .update_many::<serde_json::Value>(&updates, Some(&token), None)
         .await
         .expect("updateMany with token should succeed");
     println!(
         "✅ updateMany → {} records",
-        updated.data.as_ref().map_or(0, |d| d.len())
+        updated_resp.data.as_ref().map_or(0, Vec::len)
     );
 
     // Delete many (explicit token)
@@ -420,7 +421,7 @@ async fn test_products_bulk() {
         .expect("deleteMany with token should succeed");
     println!(
         "✅ deleteMany → {} records",
-        deleted.data.as_ref().map_or(0, |d| d.len())
+        deleted.data.as_ref().map_or(0, Vec::len)
     );
 }
 
@@ -428,7 +429,7 @@ async fn test_products_bulk() {
 //  Storage upload + download
 // ──────────────────────────────────────────────
 
-#[ignore]
+#[ignore = "requires running Microgen API instance"]
 #[tokio::test]
 async fn test_storage_upload() {
     let mg = client();
@@ -442,7 +443,7 @@ async fn test_storage_upload() {
     match &result {
         Ok(storage) => {
             println!("✅ upload succeeded:");
-            println!("   id:       {}", storage._id);
+            println!("   id:       {}", storage.id);
             println!("   filename: {}", storage.file_name);
             println!("   mime:     {:?}", storage.mime_type);
             println!("   size:     {}", storage.size);
@@ -462,7 +463,7 @@ async fn test_storage_upload() {
             println!("✅ download verified content matches");
         }
         Err(e) => {
-            panic!("storage upload failed: {}", e);
+            panic!("storage upload failed: {e}");
         }
     }
 }
@@ -471,7 +472,7 @@ async fn test_storage_upload() {
 //  Realtime — get table ID
 // ──────────────────────────────────────────────
 
-#[ignore]
+#[ignore = "requires running Microgen API instance"]
 #[tokio::test]
 async fn test_realtime_get_table_id() {
     let mg = client();
@@ -479,11 +480,11 @@ async fn test_realtime_get_table_id() {
     let table_id = mg.realtime.get_table_id(TABLE).await;
     match &table_id {
         Ok(id) => {
-            println!("✅ getTableId({}) = {}", TABLE, id);
+            println!("✅ getTableId({TABLE}) = {id}");
             assert!(!id.is_empty(), "table_id should not be empty");
         }
         Err(e) => {
-            panic!("getTableId failed: {}", e);
+            panic!("getTableId failed: {e}");
         }
     }
 }
@@ -492,7 +493,7 @@ async fn test_realtime_get_table_id() {
 //  Pagination headers (auth create + public read)
 // ──────────────────────────────────────────────
 
-#[ignore]
+#[ignore = "requires running Microgen API instance"]
 #[tokio::test]
 async fn test_products_pagination() {
     let mg = client();
@@ -530,7 +531,7 @@ async fn test_products_pagination() {
         "✅ pagination: limit={:?}, skip={:?}, count={}",
         result.limit,
         result.skip,
-        result.data.as_ref().map_or(0, |d| d.len()),
+        result.data.as_ref().map_or(0, Vec::len),
     );
 
     // Cleanup (explicit token)

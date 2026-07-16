@@ -1,7 +1,7 @@
-use crate::auth::check_status;
-use crate::error::{MicrogenError, Result};
+use crate::error::{check_status, MicrogenError, Result};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::connect_async;
@@ -10,6 +10,7 @@ use tokio_tungstenite::tungstenite::Message;
 type SubscriptionMap = Arc<Mutex<HashMap<String, mpsc::Sender<()>>>>;
 
 /// Realtime / WebSocket client for database change notifications and Regol auth.
+#[derive(Debug, Clone)]
 pub struct RealtimeClient {
     api_key: String,
     ws_base: String,
@@ -19,11 +20,7 @@ pub struct RealtimeClient {
 }
 
 impl RealtimeClient {
-    pub(crate) fn new(
-        api_key: String,
-        ws_base: String,
-        http_client: reqwest::Client,
-    ) -> Self {
+    pub(crate) fn new(api_key: String, ws_base: String, http_client: reqwest::Client) -> Self {
         Self {
             api_key,
             ws_base,
@@ -34,13 +31,18 @@ impl RealtimeClient {
     }
 
     /// Resolve a human-readable table name to a numeric `table_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::WebSocket`] if the response is malformed,
+    /// [`MicrogenError::Api`] on non-success HTTP status,
+    /// [`MicrogenError::Request`] on network failures.
     pub async fn get_table_id(&self, table_name: &str) -> Result<String> {
-        let url = format!(
-            "{}/channel/{}/{}",
-            self.ws_base.replace("ws", "http"),
-            self.api_key,
-            table_name
-        );
+        let http_base = self
+            .ws_base
+            .replace("wss://", "https://")
+            .replace("ws://", "http://");
+        let url = format!("{http_base}/channel/{}/{}", self.api_key, table_name);
         let resp = self.http_client.get(&url).send().await?;
         let resp = check_status(resp).await?;
         let data: serde_json::Value = resp.json().await?;
@@ -63,6 +65,12 @@ impl RealtimeClient {
     /// `callback` – invoked on each realtime message.
     /// `on_disconnect` – called when the WebSocket disconnects.
     /// `on_connect` – called when the WebSocket (re)connects.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::WebSocket`] on WebSocket protocol errors,
+    /// [`MicrogenError::WebSocketConnection`] on connection failures,
+    /// [`MicrogenError::Request`] on HTTP failures when resolving the channel.
     pub async fn subscribe(
         &self,
         table_id: &str,
@@ -73,13 +81,13 @@ impl RealtimeClient {
         on_disconnect: Option<crate::types::DisconnectCallback>,
         on_connect: Option<crate::types::ConnectCallback>,
     ) -> Result<()> {
-        let mut channel = format!("query:{}:{}", table_id, event);
+        let mut channel = format!("query:{table_id}:{event}");
         if let Some(w) = where_filter {
-            let qs = serde_qs::to_string(w)
-                .unwrap_or_default();
-            if !qs.is_empty() {
-                channel.push(':');
-                channel.push_str(&qs);
+            if let Ok(qs) = serde_qs::to_string(w) {
+                if !qs.is_empty() {
+                    channel.push(':');
+                    channel.push_str(&qs);
+                }
             }
         }
 
@@ -118,6 +126,11 @@ impl RealtimeClient {
     }
 
     /// Subscribe to Regol QR authentication events.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::WebSocket`] on WebSocket protocol errors,
+    /// [`MicrogenError::WebSocketConnection`] on connection failures.
     pub async fn subscribe_regol(
         &self,
         device_id: &str,
@@ -126,7 +139,7 @@ impl RealtimeClient {
         on_disconnect: Option<crate::types::DisconnectCallback>,
         on_connect: Option<crate::types::ConnectCallback>,
     ) -> Result<()> {
-        let channel = format!("auth:{}:{}", device_id, event);
+        let channel = format!("auth:{device_id}:{event}");
         let ws_url = self.ws_url(None);
 
         let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
@@ -165,7 +178,7 @@ impl RealtimeClient {
     fn ws_url(&self, token: Option<&str>) -> String {
         let mut url = format!("{}/connection/{}/websocket", self.ws_base, self.api_key);
         if let Some(t) = token {
-            url.push_str(&format!("?token={}", t));
+            let _ = write!(url, "?token={t}");
         }
         url
     }
@@ -179,9 +192,7 @@ async fn run_ws_loop(
     on_disconnect: Option<crate::types::DisconnectCallback>,
     on_connect: Option<crate::types::ConnectCallback>,
 ) -> Result<()> {
-    let (ws_stream, _) = connect_async(ws_url.to_string())
-        .await
-        .map_err(|e| MicrogenError::WebSocket(format!("connection failed: {}", e)))?;
+    let (ws_stream, _) = connect_async(ws_url.to_string()).await?;
 
     let (mut write, mut read) = ws_stream.split();
 
@@ -189,21 +200,11 @@ async fn run_ws_loop(
     let init = serde_json::json!({ "params": { "name": "rust" }, "id": 1 });
     let sub = serde_json::json!({ "method": 1, "params": { "channel": channel }, "id": 2 });
 
-    if write
-        .send(Message::Text(init.to_string()))
-        .await
-        .is_err()
-    {
+    if write.send(Message::Text(init.to_string())).await.is_err() {
         return Err(MicrogenError::WebSocket("failed to send init".into()));
     }
-    if write
-        .send(Message::Text(sub.to_string()))
-        .await
-        .is_err()
-    {
-        return Err(MicrogenError::WebSocket(
-            "failed to send subscribe".into(),
-        ));
+    if write.send(Message::Text(sub.to_string())).await.is_err() {
+        return Err(MicrogenError::WebSocket("failed to send subscribe".into()));
     }
 
     if let Some(cb) = on_connect {
@@ -223,23 +224,17 @@ async fn run_ws_loop(
                             callback(event);
                         }
                     }
-                    Some(Ok(Message::Close(_))) => {
-                        if let Some(cb) = on_disconnect {
-                            cb();
-                        }
-                        break;
-                    }
                     Some(Ok(Message::Ping(d))) => {
                         let _ = write.send(Message::Pong(d)).await;
                     }
                     Some(Err(e)) => {
-                        log::warn!("WebSocket error: {}", e);
+                        log::warn!("WebSocket error: {e}");
                         if let Some(cb) = on_disconnect {
                             cb();
                         }
                         break;
                     }
-                    None => {
+                    Some(Ok(Message::Close(_))) | None => {
                         if let Some(cb) = on_disconnect {
                             cb();
                         }

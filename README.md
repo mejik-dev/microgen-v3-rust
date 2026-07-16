@@ -5,7 +5,7 @@ Unofficial Rust client for [Microgen](https://microgen.id) — a no-code backend
 [![Crates.io][crates-badge]][crates-url]
 [![MIT licensed][mit-badge]][mit-url]
 
-[crates-badge]: https://img.shields.io/badge/crates.io-v0.1.0-orange
+[crates-badge]: https://img.shields.io/badge/crates.io-v0.2.0-orange
 [crates-url]: https://crates.io/crates/microgen-v3-sdk-rust
 [mit-badge]: https://img.shields.io/badge/license-MIT-blue
 [mit-url]: https://github.com/mejik-dev/microgen-v3-sdk/blob/main/LICENSE
@@ -31,7 +31,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-microgen-v3-sdk-rust = "0.1.0"
+microgen-v3-sdk-rust = "0.2.0"
 # Required runtime
 tokio = { version = "1", features = ["full"] }
 ```

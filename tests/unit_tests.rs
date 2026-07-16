@@ -1,4 +1,4 @@
-use microgen_v3_sdk_rust::types::*;
+use microgen_v3_sdk_rust::*;
 use serde_json::json;
 
 // ──────────────────────────────────────────────
@@ -20,8 +20,14 @@ fn test_build_find_query_skip_limit() {
         ..Default::default()
     };
     let map = build_find_query(&opt);
-    assert_eq!(map.get("$skip").and_then(|v| v.as_u64()), Some(10));
-    assert_eq!(map.get("$limit").and_then(|v| v.as_u64()), Some(5));
+    assert_eq!(
+        map.get("$skip").and_then(serde_json::Value::as_u64),
+        Some(10)
+    );
+    assert_eq!(
+        map.get("$limit").and_then(serde_json::Value::as_u64),
+        Some(5)
+    );
 }
 
 #[test]
@@ -34,10 +40,7 @@ fn test_build_find_query_sort() {
     };
     let map = build_find_query(&opt);
     let sort_val = map.get("$sort").expect("$sort should be present");
-    assert_eq!(
-        sort_val,
-        &json!([{ "name": 1 }])
-    );
+    assert_eq!(sort_val, &json!([{ "name": 1 }]));
 }
 
 #[test]
@@ -64,19 +67,13 @@ fn test_build_find_query_lookup() {
 #[test]
 fn test_build_find_query_where_simple() {
     let mut where_clause = WhereClause::new();
-    where_clause.insert(
-        "name".into(),
-        WhereValue::Value(json!("Ega")),
-    );
+    where_clause.insert("name".into(), WhereValue::Value(json!("Ega")));
     let opt = FindOption {
         r#where: Some(where_clause),
         ..Default::default()
     };
     let map = build_find_query(&opt);
-    assert_eq!(
-        map.get("name").and_then(|v| v.as_str()),
-        Some("Ega")
-    );
+    assert_eq!(map.get("name").and_then(|v| v.as_str()), Some("Ega"));
 }
 
 #[test]
@@ -116,10 +113,7 @@ fn test_build_find_query_all_operators() {
     };
     let map = build_find_query(&opt);
     let age_val = map.get("age").expect("age should be present");
-    assert_eq!(
-        age_val,
-        &json!({ "$gt": 10, "$lt": 50 })
-    );
+    assert_eq!(age_val, &json!({ "$gt": 10, "$lt": 50 }));
 }
 
 #[test]
@@ -169,8 +163,7 @@ fn test_build_find_query_qs_output() {
     // Should contain the key parts with URL-encoded `$`
     assert!(
         qs.contains("name[%24ne]=Ega"),
-        "expected name[%24ne]=Ega in qs output, got: {}",
-        qs
+        "expected name[%24ne]=Ega in qs output, got: {qs}",
     );
 }
 
@@ -188,16 +181,16 @@ fn test_build_count_query_empty() {
 #[test]
 fn test_build_count_query_with_where() {
     let mut where_clause = WhereClause::new();
-    where_clause.insert(
-        "active".into(),
-        WhereValue::Value(json!(true)),
-    );
+    where_clause.insert("active".into(), WhereValue::Value(json!(true)));
     let opt = CountOption {
         r#where: Some(where_clause),
         or: None,
     };
     let map = build_count_query(&opt);
-    assert_eq!(map.get("active").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(
+        map.get("active").and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
 }
 
 #[test]
@@ -214,10 +207,7 @@ fn test_build_get_by_id_query_with_lookup() {
         select: None,
     };
     let map = build_get_by_id_query(&opt);
-    assert_eq!(
-        map.get("$lookup"),
-        Some(&json!(["categories", "tags"]))
-    );
+    assert_eq!(map.get("$lookup"), Some(&json!(["categories", "tags"])));
 }
 
 // ──────────────────────────────────────────────
@@ -241,8 +231,7 @@ fn test_deserialize_token_response() {
         "token": "abc123",
         "user": { "_id": "1", "email": "user@example.com" }
     }"#;
-    let resp: TokenResponse<serde_json::Value> =
-        serde_json::from_str(json_str).unwrap();
+    let resp: TokenResponse<serde_json::Value> = serde_json::from_str(json_str).unwrap();
     assert_eq!(resp.token, "abc123");
     assert_eq!(resp.user["email"], "user@example.com");
 }
@@ -257,10 +246,10 @@ fn test_deserialize_storage() {
         "url": "https://storage.microgen.id/file123/photo.jpg"
     }"#;
     let storage: Storage = serde_json::from_str(json_str).unwrap();
-    assert_eq!(storage._id, "file123");
+    assert_eq!(storage.id, "file123");
     assert_eq!(storage.file_name, "photo.jpg");
     assert_eq!(storage.mime_type, "image/jpeg");
-    assert_eq!(storage.size, 1024000);
+    assert_eq!(storage.size, 1_024_000);
 }
 
 #[test]

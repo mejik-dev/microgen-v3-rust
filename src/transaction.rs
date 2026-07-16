@@ -12,10 +12,10 @@
 //!
 //! # Lifecycle
 //!
-//! 1. **Authenticate** – [`AuthClient::login`] / [`AuthClient::register`]
+//! 1. **Authenticate** – [`crate::AuthClient::login()`] / [`crate::AuthClient::register()`]
 //! 2. **Create a session** – [`TransactionClient::create_session`]
 //! 3. **Create a transaction** – [`TransactionClient::create_transaction`]
-//! 4. **Run CRUD inside the transaction** – Use [`QueryClient::with_txn`] on
+//! 4. **Run CRUD inside the transaction** – Use [`crate::QueryClient::with_txn()`] on
 //!    any service client to append `?sid=…&txn=…` to every request.
 //! 5. **Commit or abort** – [`TransactionClient::commit`] or
 //!    [`TransactionClient::abort`].
@@ -28,7 +28,7 @@
 //! use microgen_v3_sdk_rust::{MicrogenClient, MicrogenClientOptions};
 //!
 //! # async fn example() {
-//! let mg = MicrogenClient::new(MicrogenClientOptions::new("my-api-key"));
+//! let mg = MicrogenClient::new(MicrogenClientOptions::new("my-api-key")).unwrap();
 //!
 //! // 0. Authenticate — token is stored and shared automatically
 //! mg.auth.login::<serde_json::Value>(&serde_json::json!({
@@ -56,8 +56,7 @@
 //! # }
 //! ```
 
-use crate::auth::check_status;
-use crate::error::Result;
+use crate::error::{check_status, Result};
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
@@ -69,7 +68,7 @@ use std::sync::{Arc, Mutex};
 ///
 /// Sessions are created via [`TransactionClient::create_session`] and
 /// have a server-side timeout of roughly one minute.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     pub id: String,
 }
@@ -78,7 +77,7 @@ pub struct Session {
 ///
 /// Created via [`TransactionClient::create_transaction`], then committed
 /// or aborted through [`TransactionClient::commit`] / [`TransactionClient::abort`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transaction {
     pub id: String,
 }
@@ -114,7 +113,7 @@ struct CreateTxnResponse {
 /// use microgen_v3_sdk_rust::{MicrogenClient, MicrogenClientOptions};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let mg = MicrogenClient::new(MicrogenClientOptions::new("your-api-key"));
+/// let mg = MicrogenClient::new(MicrogenClientOptions::new("your-api-key")).unwrap();
 ///
 /// // 0. Authenticate first — token is stored and shared automatically
 /// mg.auth.login::<serde_json::Value>(&serde_json::json!({
@@ -138,6 +137,7 @@ struct CreateTxnResponse {
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug, Clone)]
 pub struct TransactionClient {
     client: reqwest::Client,
     base_url: String,
@@ -161,8 +161,9 @@ impl TransactionClient {
     fn auth_header(&self) -> Option<String> {
         self.token
             .lock()
-            .ok()
-            .and_then(|t| t.clone().map(|v| format!("Bearer {}", v)))
+            .unwrap()
+            .clone()
+            .map(|v| format!("Bearer {v}"))
     }
 
     // ── helpers ───────────────────────────────
@@ -196,10 +197,16 @@ impl TransactionClient {
     /// Create a new session.
     ///
     /// Requires authentication — the stored token (set via
-    /// [`AuthClient::login`](crate::AuthClient::login) / `register`) is
+    /// [`crate::AuthClient::login()`] / `register`) is
     /// sent automatically.
     ///
     /// The session expires server-side after roughly one minute.
+    /// # Errors
+    ///
+    /// Returns [`crate::error::MicrogenError::Api`] if the server returns a non-success status,
+    /// [`crate::error::MicrogenError::Request`] on network failures,
+    /// [`crate::error::MicrogenError::Serde`] on JSON parse errors.
+    /// Returns [`crate::error::MicrogenError::InvalidArgument`] if no bearer token is stored.
     pub async fn create_session(&self) -> Result<Session> {
         let resp = self
             .with_auth(self.client.post(self.session_url()))
@@ -215,6 +222,11 @@ impl TransactionClient {
     /// Create a new transaction inside `session`.
     ///
     /// Requires authentication — uses the stored Bearer token.
+    /// # Errors
+    ///
+    /// Returns [`crate::error::MicrogenError::Api`] if the server returns a non-success status,
+    /// [`crate::error::MicrogenError::Request`] on network failures,
+    /// [`crate::error::MicrogenError::Serde`] on JSON parse errors.
     pub async fn create_transaction(&self, session: &Session) -> Result<Transaction> {
         let resp = self
             .with_auth(self.client.post(self.txns_url(session)))
@@ -230,6 +242,11 @@ impl TransactionClient {
     /// List all transactions inside `session`.
     ///
     /// Requires authentication — uses the stored Bearer token.
+    /// # Errors
+    ///
+    /// Returns [`crate::error::MicrogenError::Api`] if the server returns a non-success status,
+    /// [`crate::error::MicrogenError::Request`] on network failures,
+    /// [`crate::error::MicrogenError::Serde`] on JSON parse errors.
     pub async fn get_transactions(&self, session: &Session) -> Result<Vec<Transaction>> {
         let resp = self
             .with_auth(self.client.get(self.txns_url(session)))
@@ -250,6 +267,10 @@ impl TransactionClient {
     /// Commit a transaction, making its changes permanent.
     ///
     /// Requires authentication — uses the stored Bearer token.
+    /// # Errors
+    ///
+    /// Returns [`crate::error::MicrogenError::Api`] if the server returns a non-success status,
+    /// [`crate::error::MicrogenError::Request`] on network failures.
     pub async fn commit(&self, session: &Session, txn: &Transaction) -> Result<()> {
         let resp = self
             .with_auth(self.client.patch(self.txn_url(session, txn)))
@@ -262,6 +283,10 @@ impl TransactionClient {
     /// Abort (rollback) a transaction, discarding its changes.
     ///
     /// Requires authentication — uses the stored Bearer token.
+    /// # Errors
+    ///
+    /// Returns [`crate::error::MicrogenError::Api`] if the server returns a non-success status,
+    /// [`crate::error::MicrogenError::Request`] on network failures.
     pub async fn abort(&self, session: &Session, txn: &Transaction) -> Result<()> {
         let resp = self
             .with_auth(self.client.delete(self.txn_url(session, txn)))

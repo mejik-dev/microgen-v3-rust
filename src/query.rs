@@ -1,9 +1,11 @@
-use crate::auth::check_status;
-use crate::error::{MicrogenError, Result};
+use crate::error::{check_status, MicrogenError, Result};
 use crate::field::FieldClient;
-use crate::types::*;
-use reqwest::Client;
+use crate::types::{
+    build_count_query, build_find_query, build_get_by_id_query, BulkBehavior, CountOption,
+    FindOption, GetByIdOption, MicrogenCountResponse, MicrogenResponse, MicrogenSingleResponse,
+};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::Client;
 
 /// CRUD client for a single table / service.
 ///
@@ -23,7 +25,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 /// use microgen_v3_sdk_rust::{MicrogenClient, MicrogenClientOptions};
 ///
 /// # async fn example() {
-/// let mg = MicrogenClient::new(MicrogenClientOptions::new("my-api-key"));
+/// let mg = MicrogenClient::new(MicrogenClientOptions::new("my-api-key")).unwrap();
 ///
 /// // 0. Authenticate first — token shared automatically
 /// mg.auth.login::<serde_json::Value>(&serde_json::json!({
@@ -42,7 +44,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 /// let result = svc.find::<serde_json::Value>(None, None).await.unwrap();
 /// # }
 /// ```
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct QueryClient {
     client: Client,
     table_url: String,
@@ -62,10 +64,10 @@ impl QueryClient {
         base_url: &str,
         headers: HeaderMap,
     ) -> Self {
-        let table_url = format!("{}/{}", base_url, table_name);
+        let table_url = format!("{base_url}/{table_name}");
         let field = FieldClient::new(
             client.clone(),
-            &format!("{}/tables/{}", base_url, table_name),
+            &format!("{base_url}/tables/{table_name}"),
             &headers,
         );
         Self {
@@ -83,6 +85,7 @@ impl QueryClient {
     ///
     /// Every subsequent `find`, `create`, `update_by_id`, … call will
     /// automatically append `?sid={session_id}&txn={txn_id}` to the URL.
+    #[must_use]
     pub fn with_txn(&self, session_id: &str, txn_id: &str) -> Self {
         Self {
             client: self.client.clone(),
@@ -98,7 +101,7 @@ impl QueryClient {
     fn append_txn_params(&self, url: &str) -> String {
         if let (Some(sid), Some(txn)) = (&self.session_id, &self.transaction_id) {
             let sep = if url.contains('?') { "&" } else { "?" };
-            format!("{}{}sid={}&txn={}", url, sep, sid, txn)
+            format!("{url}{sep}sid={sid}&txn={txn}")
         } else {
             url.to_string()
         }
@@ -142,14 +145,14 @@ impl QueryClient {
         } else {
             let qs = serde_qs::to_string(&q)
                 .map_err(|e| MicrogenError::InvalidArgument(e.to_string()))?;
-            Ok(format!("{}?{}", base, qs))
+            Ok(format!("{base}?{qs}"))
         }
     }
 
     fn auth_headers(&self, token: Option<&str>) -> Result<HeaderMap> {
         let mut h = self.headers.clone();
         if let Some(t) = token {
-            let value = HeaderValue::from_str(&format!("Bearer {}", t))
+            let value = HeaderValue::from_str(&format!("Bearer {t}"))
                 .map_err(|e| MicrogenError::InvalidArgument(e.to_string()))?;
             h.insert(reqwest::header::AUTHORIZATION, value);
         }
@@ -161,28 +164,35 @@ impl QueryClient {
         HeaderName::from_static("x-bulk-response-type")
     }
 
-    /// Apply the optional bulk behavior header to a HeaderMap.
+    /// Apply the optional bulk behavior header to a [`HeaderMap`](reqwest::header::HeaderMap).
     fn apply_bulk_behavior(h: &mut HeaderMap, bulk_behavior: Option<BulkBehavior>) {
         if let Some(b) = bulk_behavior {
-            h.insert(Self::bulk_header(), HeaderValue::from_static(b.as_header_value()));
+            h.insert(
+                Self::bulk_header(),
+                HeaderValue::from_static(b.as_header_value()),
+            );
         }
     }
 
     /// Known HTTP extension method for linking records.
     fn method_link() -> reqwest::Method {
-        reqwest::Method::from_bytes(b"LINK")
-            .expect("'LINK' is a valid HTTP extension method")
+        reqwest::Method::from_bytes(b"LINK").expect("'LINK' is a valid HTTP extension method")
     }
 
     /// Known HTTP extension method for unlinking records.
     fn method_unlink() -> reqwest::Method {
-        reqwest::Method::from_bytes(b"UNLINK")
-            .expect("'UNLINK' is a valid HTTP extension method")
+        reqwest::Method::from_bytes(b"UNLINK").expect("'UNLINK' is a valid HTTP extension method")
     }
 
     // ── public API ───────────────────────────────────────
 
     /// Find records with optional filters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn find<T: serde::de::DeserializeOwned>(
         &self,
         option: Option<&FindOption>,
@@ -218,6 +228,12 @@ impl QueryClient {
     }
 
     /// Get a single record by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn get_by_id<T: serde::de::DeserializeOwned>(
         &self,
         id: &str,
@@ -238,9 +254,15 @@ impl QueryClient {
     }
 
     /// Create a single record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn create<T: serde::de::DeserializeOwned>(
         &self,
-        body: &impl serde::Serialize,
+        body: &(impl serde::Serialize + Sync),
         token: Option<&str>,
     ) -> Result<MicrogenSingleResponse<T>> {
         let url = self.append_txn_params(&self.table_url);
@@ -260,22 +282,22 @@ impl QueryClient {
     ///
     /// When `bulk_behavior` is `None` the full list of created records is returned.
     /// When set to `BulkBehavior::Count` only the count is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn create_many<T: serde::de::DeserializeOwned>(
         &self,
-        body: &impl serde::Serialize,
+        body: &(impl serde::Serialize + Sync),
         token: Option<&str>,
         bulk_behavior: Option<BulkBehavior>,
     ) -> Result<MicrogenResponse<T>> {
         let mut h = self.auth_headers(token)?;
         Self::apply_bulk_behavior(&mut h, bulk_behavior);
         let url = self.append_txn_params(&self.table_url);
-        let resp = self
-            .client
-            .post(&url)
-            .headers(h)
-            .json(body)
-            .send()
-            .await?;
+        let resp = self.client.post(&url).headers(h).json(body).send().await?;
         let resp = check_status(resp).await?;
         let data: Vec<T> = resp.json().await?;
         Ok(MicrogenResponse {
@@ -285,11 +307,17 @@ impl QueryClient {
         })
     }
 
-    /// Update a single record by ID. Supports `$inc` via [`UpdateBody`].
+    /// Update a single record by ID. Supports `$inc` via [`crate::types::UpdateBody`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn update_by_id<T: serde::de::DeserializeOwned>(
         &self,
         id: &str,
-        body: &impl serde::Serialize,
+        body: &(impl serde::Serialize + Sync),
         token: Option<&str>,
     ) -> Result<MicrogenSingleResponse<T>> {
         let url = self.append_txn_params(&format!("{}/{}", self.table_url, id));
@@ -309,22 +337,22 @@ impl QueryClient {
     ///
     /// When `bulk_behavior` is `None` the full list is returned.
     /// When set to `BulkBehavior::Count` only the count is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn update_many<T: serde::de::DeserializeOwned>(
         &self,
-        body: &impl serde::Serialize,
+        body: &(impl serde::Serialize + Sync),
         token: Option<&str>,
         bulk_behavior: Option<BulkBehavior>,
     ) -> Result<MicrogenResponse<T>> {
         let mut h = self.auth_headers(token)?;
         Self::apply_bulk_behavior(&mut h, bulk_behavior);
         let url = self.append_txn_params(&self.table_url);
-        let resp = self
-            .client
-            .patch(&url)
-            .headers(h)
-            .json(body)
-            .send()
-            .await?;
+        let resp = self.client.patch(&url).headers(h).json(body).send().await?;
         let resp = check_status(resp).await?;
         let data: Vec<T> = resp.json().await?;
         Ok(MicrogenResponse {
@@ -335,6 +363,12 @@ impl QueryClient {
     }
 
     /// Delete a single record by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn delete_by_id<T: serde::de::DeserializeOwned>(
         &self,
         id: &str,
@@ -356,6 +390,12 @@ impl QueryClient {
     ///
     /// When `bulk_behavior` is `None` the full list is returned.
     /// When set to `BulkBehavior::Count` only the count is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn delete_many<T: serde::de::DeserializeOwned>(
         &self,
         ids: &[String],
@@ -367,12 +407,7 @@ impl QueryClient {
         let record_ids = ids.join(",");
         let base = format!("{}?recordIds={}", self.table_url, record_ids);
         let url = self.append_txn_params(&base);
-        let resp = self
-            .client
-            .delete(&url)
-            .headers(h)
-            .send()
-            .await?;
+        let resp = self.client.delete(&url).headers(h).send().await?;
         let resp = check_status(resp).await?;
         let data: Vec<T> = resp.json().await?;
         Ok(MicrogenResponse {
@@ -383,10 +418,16 @@ impl QueryClient {
     }
 
     /// Link a related record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn link<T: serde::de::DeserializeOwned>(
         &self,
         id: &str,
-        body: &impl serde::Serialize,
+        body: &(impl serde::Serialize + Sync),
         token: Option<&str>,
     ) -> Result<MicrogenSingleResponse<T>> {
         let url = self.append_txn_params(&format!("{}/{}", self.table_url, id));
@@ -403,10 +444,16 @@ impl QueryClient {
     }
 
     /// Unlink a related record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn unlink<T: serde::de::DeserializeOwned>(
         &self,
         id: &str,
-        body: &impl serde::Serialize,
+        body: &(impl serde::Serialize + Sync),
         token: Option<&str>,
     ) -> Result<MicrogenSingleResponse<T>> {
         let url = self.append_txn_params(&format!("{}/{}", self.table_url, id));
@@ -423,6 +470,12 @@ impl QueryClient {
     }
 
     /// Count records, optionally filtered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::Api`] if the server returns a non-success status,
+    /// [`MicrogenError::Request`] on network failures,
+    /// [`MicrogenError::Serde`] on JSON parse errors.
     pub async fn count(
         &self,
         option: Option<&CountOption>,
@@ -445,8 +498,6 @@ impl QueryClient {
             .await?;
         let resp = check_status(resp).await?;
         let data: crate::types::MicrogenCount = resp.json().await?;
-        Ok(MicrogenCountResponse {
-            data: Some(data),
-        })
+        Ok(MicrogenCountResponse { data: Some(data) })
     }
 }

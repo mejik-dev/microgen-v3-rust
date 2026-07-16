@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 
 // ──────────────────────────────────────────────
 //  Client options
 // ──────────────────────────────────────────────
 
 /// Configuration passed to [`MicrogenClient`][crate::MicrogenClient].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct MicrogenClientOptions {
     /// The unique Microgen API key from your project dashboard.
     pub api_key: String,
@@ -18,6 +20,21 @@ pub struct MicrogenClientOptions {
     pub query_url: Option<String>,
     /// Dedicated streaming URL override.
     pub stream_url: Option<String>,
+    /// Request timeout duration (default: 30 seconds).
+    pub timeout: Option<Duration>,
+}
+
+impl Default for MicrogenClientOptions {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            host: None,
+            is_secure: None,
+            query_url: None,
+            stream_url: None,
+            timeout: Some(Duration::from_secs(30)),
+        }
+    }
 }
 
 impl MicrogenClientOptions {
@@ -38,9 +55,9 @@ impl MicrogenClientOptions {
 pub struct MicrogenResponse<T> {
     pub data: Option<Vec<T>>,
     #[serde(default)]
-    pub limit: Option<i64>,
+    pub limit: Option<u64>,
     #[serde(default)]
-    pub skip: Option<i64>,
+    pub skip: Option<u64>,
 }
 
 /// Response for single-resource operations (getById, create, updateById, …).
@@ -66,7 +83,8 @@ pub struct MicrogenCountResponse {
 // ──────────────────────────────────────────────
 
 /// Sort direction (serializes as `1` for ascending, `-1` for descending).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SortDirection {
     Asc,
     Desc,
@@ -87,7 +105,9 @@ impl<'de> serde::Deserialize<'de> for SortDirection {
         match n {
             1 => Ok(Self::Asc),
             -1 => Ok(Self::Desc),
-            _ => Err(serde::de::Error::custom("sort must be 1 (asc) or -1 (desc)")),
+            _ => Err(serde::de::Error::custom(
+                "sort must be 1 (asc) or -1 (desc)",
+            )),
         }
     }
 }
@@ -171,7 +191,7 @@ pub struct CountOption {
 
 /// Body for update operations – supports `$inc` in addition to normal fields.
 #[derive(Debug, Clone, Serialize)]
-pub struct UpdateBody<T: Serialize> {
+pub struct UpdateBody<T> {
     #[serde(flatten)]
     pub fields: T,
     #[serde(skip_serializing_if = "Option::is_none", rename = "$inc")]
@@ -179,7 +199,8 @@ pub struct UpdateBody<T: Serialize> {
 }
 
 /// Controls the response shape of bulk operations (createMany, updateMany, …).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BulkBehavior {
     /// Return only the count of affected records.
     Count,
@@ -188,6 +209,7 @@ pub enum BulkBehavior {
 }
 
 impl BulkBehavior {
+    #[must_use]
     pub fn as_header_value(&self) -> &'static str {
         match self {
             Self::Count => "count",
@@ -232,12 +254,13 @@ pub struct GetUserOption {
 /// Metadata about an uploaded file.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Storage {
-    pub _id: String,
+    #[serde(rename = "_id")]
+    pub id: String,
     #[serde(rename = "fileName")]
     pub file_name: String,
     #[serde(rename = "mimeType")]
     pub mime_type: String,
-    pub size: i64,
+    pub size: u64,
     pub url: String,
 }
 
@@ -295,6 +318,7 @@ pub struct CreateFieldBody {
 
 /// Events emitted by the realtime subscription.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum RealtimeEvent {
     CreateRecord(serde_json::Value),
     UpdateRecord(serde_json::Value),
@@ -327,6 +351,7 @@ pub struct GetTableIdResponse {
 // ──────────────────────────────────────────────
 
 /// Build a `serde_json::Map` from `FindOption` suitable for `serde_qs`.
+#[must_use]
 pub fn build_find_query(option: &FindOption) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
     if let Some(v) = option.skip {
@@ -356,6 +381,7 @@ pub fn build_find_query(option: &FindOption) -> serde_json::Map<String, serde_js
 }
 
 /// Build a `serde_json::Map` from `CountOption`.
+#[must_use]
 pub fn build_count_query(option: &CountOption) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
     if let Some(ref v) = option.or {
@@ -370,6 +396,7 @@ pub fn build_count_query(option: &CountOption) -> serde_json::Map<String, serde_
 }
 
 /// Build a `serde_json::Map` from `GetByIdOption`.
+#[must_use]
 pub fn build_get_by_id_query(option: &GetByIdOption) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
     if let Some(ref v) = option.select {

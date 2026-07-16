@@ -1,4 +1,5 @@
 use crate::auth::AuthClient;
+use crate::error::{MicrogenError, Result};
 use crate::query::QueryClient;
 use crate::realtime::RealtimeClient;
 use crate::storage::StorageClient;
@@ -16,7 +17,8 @@ use std::sync::{Arc, Mutex};
 /// # async fn example() {
 /// let mg = MicrogenClient::new(
 ///     MicrogenClientOptions::new("your-api-key"),
-/// );
+/// )
+/// .unwrap();
 ///
 /// // Auth
 /// let tr = mg.auth.login::<serde_json::Value>(
@@ -28,6 +30,7 @@ use std::sync::{Arc, Mutex};
 /// let result = posts.find::<serde_json::Value>(None, None).await.unwrap();
 /// # }
 /// ```
+#[derive(Debug, Clone)]
 pub struct MicrogenClient {
     /// Authentication client.
     pub auth: AuthClient,
@@ -44,12 +47,13 @@ pub struct MicrogenClient {
 impl MicrogenClient {
     /// Create a new `MicrogenClient`.
     ///
-    /// Panics if `api_key` is empty.
-    pub fn new(options: MicrogenClientOptions) -> Self {
-        assert!(
-            !options.api_key.is_empty(),
-            "apiKey is required"
-        );
+    /// # Errors
+    ///
+    /// Returns [`MicrogenError::InvalidArgument`] if `api_key` is empty.
+    pub fn new(options: MicrogenClientOptions) -> Result<Self> {
+        if options.api_key.is_empty() {
+            return Err(MicrogenError::InvalidArgument("apiKey is required".into()));
+        }
 
         let host = options.host.unwrap_or_else(|| "v3.microgen.id".into());
         let secure = options.is_secure.unwrap_or(true);
@@ -58,21 +62,24 @@ impl MicrogenClient {
 
         let query_url = options
             .query_url
-            .unwrap_or_else(|| format!("{}://database-query.{}/api/v1/", scheme, host));
-        // Ensure query_url ends with "/" before appending API key,
-        // so both "…/api/v1" and "…/api/v1/" work correctly.
+            .unwrap_or_else(|| format!("{scheme}://database-query.{host}/api/v1/"));
         let base = query_url.trim_end_matches('/');
-        let full_query_url = format!("{}/{}", base, options.api_key);
+        let full_query_url = format!("{base}/{}", options.api_key);
 
         let stream_url = options
             .stream_url
-            .unwrap_or_else(|| format!("{}://database-stream.{}", ws_scheme, host));
+            .unwrap_or_else(|| format!("{ws_scheme}://database-stream.{host}"));
 
-        let http_client = reqwest::Client::new();
+        let http_client = reqwest::Client::builder()
+            .timeout(
+                options
+                    .timeout
+                    .unwrap_or_else(|| std::time::Duration::from_secs(30)),
+            )
+            .build()?;
 
         // Shared token storage across AuthClient, StorageClient, and TransactionClient
-        let token_storage: Arc<Mutex<Option<String>>> =
-            Arc::new(Mutex::new(None));
+        let token_storage: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         let auth = AuthClient::new(
             http_client.clone(),
@@ -80,35 +87,30 @@ impl MicrogenClient {
             token_storage.clone(),
         );
 
-        let realtime = RealtimeClient::new(
-            options.api_key.clone(),
-            stream_url,
-            http_client.clone(),
-        );
+        let realtime =
+            RealtimeClient::new(options.api_key.clone(), stream_url, http_client.clone());
 
-        let storage_base = format!("{}/storage", full_query_url);
+        let storage_base = format!("{full_query_url}/storage");
         let storage = StorageClient::new(http_client.clone(), storage_base, token_storage.clone());
 
         let txn_base_url = full_query_url.clone();
-        let transactions = TransactionClient::new(
-            http_client.clone(),
-            txn_base_url,
-            token_storage.clone(),
-        );
+        let transactions =
+            TransactionClient::new(http_client.clone(), txn_base_url, token_storage.clone());
 
-        Self {
+        Ok(Self {
             auth,
             realtime,
             storage,
             transactions,
             query_url: full_query_url,
             http_client,
-        }
+        })
     }
 
     /// Obtain a [`QueryClient`] for the named table / service.
     ///
     /// Each call creates a fresh client; the underlying HTTP client is shared.
+    #[must_use]
     pub fn service(&self, table_name: &str) -> QueryClient {
         let headers = self.build_headers();
         QueryClient::new(
@@ -122,9 +124,10 @@ impl MicrogenClient {
     fn build_headers(&self) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
         if let Some(token) = self.auth.token() {
-            if let Ok(val) = format!("Bearer {}", token).parse() {
-                headers.insert(reqwest::header::AUTHORIZATION, val);
-            }
+            let val: reqwest::header::HeaderValue = format!("Bearer {token}")
+                .parse()
+                .expect("token from auth API is always valid ASCII");
+            headers.insert(reqwest::header::AUTHORIZATION, val);
         }
         headers
     }

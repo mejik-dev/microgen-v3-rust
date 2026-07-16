@@ -10,7 +10,7 @@
 //! use microgen_v3_sdk_rust::{MicrogenClient, MicrogenClientOptions};
 //!
 //! # async fn example() {
-//! let mg = MicrogenClient::new(MicrogenClientOptions::new("my-api-key"));
+//! let mg = MicrogenClient::new(MicrogenClientOptions::new("my-api-key")).unwrap();
 //!
 //! // ── Auth ──
 //! let token_resp = mg
@@ -42,14 +42,14 @@
 //!
 //! All session and transaction operations require **authentication**.
 //! The bearer token is automatically shared after login — call
-//! [`AuthClient::login`](crate::AuthClient::login) / [`AuthClient::register`](crate::AuthClient::register)
+//! [`AuthClient::login()`](crate::AuthClient::login) / [`AuthClient::register()`](crate::AuthClient::register)
 //! first, then the transaction methods pick it up.
 //!
 //! ```rust,no_run
 //! use microgen_v3_sdk_rust::{MicrogenClient, MicrogenClientOptions};
 //!
 //! # async fn example() {
-//! let mg = MicrogenClient::new(MicrogenClientOptions::new("my-api-key"));
+//! let mg = MicrogenClient::new(MicrogenClientOptions::new("my-api-key")).unwrap();
 //!
 //! // 0. Authenticate first — token is stored automatically
 //! mg.auth.login::<serde_json::Value>(&serde_json::json!({
@@ -92,8 +92,8 @@ mod field;
 mod query;
 mod realtime;
 mod storage;
-pub mod transaction;
-pub mod types;
+mod transaction;
+mod types;
 
 pub use auth::AuthClient;
 pub use client::MicrogenClient;

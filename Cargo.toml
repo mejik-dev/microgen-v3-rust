@@ -1,7 +1,8 @@
 [package]
 name = "microgen-v3-sdk-rust"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+rust-version = "1.75"
 description = "Rust SDK for Microgen API - No Code Backend API"
 repository = "https://github.com/mejik-dev/microgen-v3-sdk"
 homepage = "https://microgen.id"
@@ -25,6 +26,21 @@ unsafe_code = "deny"
 
 [lints.clippy]
 all = { level = "deny", priority = 10 }
+pedantic = { level = "deny", priority = 5 }
+# Select nursery & correctness lints
+future_not_send = { level = "deny", priority = 1 }
+trait_duplication_in_bounds = { level = "deny", priority = 1 }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.bench]
+inherits = "release"
+debug = true
+strip = false
 
 [lib]
 name = "microgen_v3_sdk_rust"

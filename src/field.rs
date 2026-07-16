@@ -1,11 +1,10 @@
-use crate::auth::check_status;
-use crate::error::Result;
-use crate::types::*;
+use crate::error::{check_status, Result};
+use crate::types::{CreateFieldBody, Field};
 use reqwest::Client;
 use serde::Deserialize;
 
 /// Schema (field definition) client for a table.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct FieldClient {
     client: Client,
     fields_url: String,
@@ -20,15 +19,19 @@ impl FieldClient {
     ) -> Self {
         Self {
             client,
-            fields_url: format!("{}/fields", base_url),
+            fields_url: format!("{base_url}/fields"),
             headers: headers.clone(),
         }
     }
 
     /// List all fields for the table.
-    pub async fn find<T: serde::de::DeserializeOwned>(
-        &self,
-    ) -> Result<FieldResponse<T>> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::MicrogenError::Api`] if the server returns a non-success status,
+    /// [`crate::error::MicrogenError::Request`] on network failures,
+    /// [`crate::error::MicrogenError::Serde`] on JSON parse errors.
+    pub async fn find<T: serde::de::DeserializeOwned>(&self) -> Result<FieldResponse<T>> {
         let resp = self
             .client
             .get(&self.fields_url)
@@ -37,12 +40,16 @@ impl FieldClient {
             .await?;
         let resp = check_status(resp).await?;
         let data: Vec<Field<T>> = resp.json().await?;
-        Ok(FieldResponse {
-            data: Some(data),
-        })
+        Ok(FieldResponse { data: Some(data) })
     }
 
     /// Get a single field by ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::MicrogenError::Api`] if the server returns a non-success status,
+    /// [`crate::error::MicrogenError::Request`] on network failures,
+    /// [`crate::error::MicrogenError::Serde`] on JSON parse errors.
     pub async fn get_by_id<T: serde::de::DeserializeOwned>(
         &self,
         id: &str,
@@ -56,12 +63,16 @@ impl FieldClient {
             .await?;
         let resp = check_status(resp).await?;
         let data: Field<T> = resp.json().await?;
-        Ok(FieldSingleResponse {
-            data: Some(data),
-        })
+        Ok(FieldSingleResponse { data: Some(data) })
     }
 
     /// Create a new field in the table schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::MicrogenError::Api`] if the server returns a non-success status,
+    /// [`crate::error::MicrogenError::Request`] on network failures,
+    /// [`crate::error::MicrogenError::Serde`] on JSON parse errors.
     pub async fn create<T: serde::de::DeserializeOwned>(
         &self,
         body: &CreateFieldBody,
@@ -75,9 +86,7 @@ impl FieldClient {
             .await?;
         let resp = check_status(resp).await?;
         let data: Field<T> = resp.json().await?;
-        Ok(FieldSingleResponse {
-            data: Some(data),
-        })
+        Ok(FieldSingleResponse { data: Some(data) })
     }
 }
 
