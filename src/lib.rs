@@ -67,7 +67,7 @@
 //! let txn = mg.transactions.create_transaction(&session).await.unwrap();
 //! println!("txn: {}", txn.id);
 //!
-//! // 3. Wrap a QueryClient so all CRUD sends sid + txn
+//! // 3. Wrap a QueryClient so all CRUD sends $sid + $txn
 //! let posts = mg.service("posts").with_txn(&session.id, &txn.id);
 //!
 //! // Every CRUD call now runs inside the transaction

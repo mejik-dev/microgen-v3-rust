@@ -16,7 +16,7 @@
 //! 2. **Create a session** – [`TransactionClient::create_session`]
 //! 3. **Create a transaction** – [`TransactionClient::create_transaction`]
 //! 4. **Run CRUD inside the transaction** – Use [`crate::QueryClient::with_txn()`] on
-//!    any service client to append `?sid=…&txn=…` to every request.
+//!    any service client to append `?$sid=…&$txn=…` to every request.
 //! 5. **Commit or abort** – [`TransactionClient::commit`] or
 //!    [`TransactionClient::abort`].
 //!
@@ -56,7 +56,7 @@
 //! # }
 //! ```
 
-use crate::error::{check_status, Result};
+use crate::error::{check_status, MicrogenError, Result};
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
@@ -158,12 +158,19 @@ impl TransactionClient {
     }
 
     /// Build the `Authorization: Bearer …` header from the stored token.
-    fn auth_header(&self) -> Option<String> {
-        self.token
+    fn auth_header(&self) -> Result<String> {
+        let token = self
+            .token
             .lock()
-            .unwrap()
+            .map_err(|_| MicrogenError::InvalidArgument("token storage is unavailable".into()))?
             .clone()
-            .map(|v| format!("Bearer {v}"))
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                MicrogenError::InvalidArgument(
+                    "authentication token is required for transactions".into(),
+                )
+            })?;
+        Ok(format!("Bearer {token}"))
     }
 
     // ── helpers ───────────────────────────────
@@ -183,13 +190,9 @@ impl TransactionClient {
         )
     }
 
-    /// Attach the stored Bearer token to a request builder, if available.
-    fn with_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        if let Some(h) = self.auth_header() {
-            req.header(reqwest::header::AUTHORIZATION, &h)
-        } else {
-            req
-        }
+    /// Attach the required stored Bearer token to a request builder.
+    fn with_auth(&self, req: reqwest::RequestBuilder) -> Result<reqwest::RequestBuilder> {
+        Ok(req.header(reqwest::header::AUTHORIZATION, self.auth_header()?))
     }
 
     // ── public API ────────────────────────────
@@ -209,7 +212,7 @@ impl TransactionClient {
     /// Returns [`crate::error::MicrogenError::InvalidArgument`] if no bearer token is stored.
     pub async fn create_session(&self) -> Result<Session> {
         let resp = self
-            .with_auth(self.client.post(self.session_url()))
+            .with_auth(self.client.post(self.session_url()))?
             .send()
             .await?;
         let resp = check_status(resp).await?;
@@ -229,7 +232,7 @@ impl TransactionClient {
     /// [`crate::error::MicrogenError::Serde`] on JSON parse errors.
     pub async fn create_transaction(&self, session: &Session) -> Result<Transaction> {
         let resp = self
-            .with_auth(self.client.post(self.txns_url(session)))
+            .with_auth(self.client.post(self.txns_url(session)))?
             .send()
             .await?;
         let resp = check_status(resp).await?;
@@ -249,7 +252,7 @@ impl TransactionClient {
     /// [`crate::error::MicrogenError::Serde`] on JSON parse errors.
     pub async fn get_transactions(&self, session: &Session) -> Result<Vec<Transaction>> {
         let resp = self
-            .with_auth(self.client.get(self.txns_url(session)))
+            .with_auth(self.client.get(self.txns_url(session)))?
             .send()
             .await?;
         let resp = check_status(resp).await?;
@@ -273,7 +276,7 @@ impl TransactionClient {
     /// [`crate::error::MicrogenError::Request`] on network failures.
     pub async fn commit(&self, session: &Session, txn: &Transaction) -> Result<()> {
         let resp = self
-            .with_auth(self.client.patch(self.txn_url(session, txn)))
+            .with_auth(self.client.patch(self.txn_url(session, txn)))?
             .send()
             .await?;
         check_status(resp).await?;
@@ -289,10 +292,29 @@ impl TransactionClient {
     /// [`crate::error::MicrogenError::Request`] on network failures.
     pub async fn abort(&self, session: &Session, txn: &Transaction) -> Result<()> {
         let resp = self
-            .with_auth(self.client.delete(self.txn_url(session, txn)))
+            .with_auth(self.client.delete(self.txn_url(session, txn)))?
             .send()
             .await?;
         check_status(resp).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn transaction_requests_require_a_non_empty_token() {
+        let client = TransactionClient::new(
+            reqwest::Client::new(),
+            "http://localhost".into(),
+            Arc::new(Mutex::new(Some("   ".into()))),
+        );
+
+        let error = client.create_session().await.unwrap_err();
+        assert!(
+            matches!(error, MicrogenError::InvalidArgument(message) if message.contains("authentication token is required"))
+        );
     }
 }

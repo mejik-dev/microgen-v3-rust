@@ -36,7 +36,7 @@ curl --location --request DELETE 'https://database-query.stagingv3.microgen.id/a
 # Usage The session Transaction
 -----
 ```json
-curl --location 'https://database-query.stagingv3.microgen.id/api/v1/c1d04e5e-8638-4f96-a7b6-ab24887b8355/TestTable?sid=6a34e6b938a032f2f78caa02&txn=1' \
+curl --location 'https://database-query.stagingv3.microgen.id/api/v1/c1d04e5e-8638-4f96-a7b6-ab24887b8355/TestTable?$sid=6a34e6b938a032f2f78caa02&$txn=1' \
 --header 'accept: application/json, text/plain, */*' \
 --header 'accept-language: en-US,en;q=0.9' \
 --header 'content-type: application/json' \
@@ -86,7 +86,7 @@ async fn example() {
     // 3. Use .with_txn() to wrap any service client
     let svc = mg.service("TestTable").with_txn(&session.id, &txn.id);
 
-    // CRUD operations automatically include ?sid=...&txn=...
+    // CRUD operations automatically include ?$sid=...&$txn=...
     let _created = svc
         .create::<serde_json::Value>(&serde_json::json!({
             "name": "test",

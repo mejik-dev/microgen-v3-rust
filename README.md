@@ -227,7 +227,7 @@ async fn main() {
         .await
         .unwrap();
 
-    // 3. Wrap a QueryClient — all CRUD gets ?sid=...&txn=... appended
+    // 3. Wrap a QueryClient — all CRUD gets ?$sid=...&$txn=... appended
     let svc = mg.service("orders").with_txn(&session.id, &txn.id);
 
     svc.create::<serde_json::Value>(
@@ -255,7 +255,7 @@ async fn main() {
 
 ### With-txn wrapper
 
-`svc.with_txn(session_id, txn_id)` returns a clone of the `QueryClient` that automatically adds `?sid={session_id}&txn={txn_id}` to every request. Works with all CRUD methods: `find`, `get_by_id`, `create`, `create_many`, `update_by_id`, `update_many`, `delete_by_id`, `delete_many`, `link`, `unlink`, `count`.
+`svc.with_txn(session_id, txn_id)` returns a clone of the `QueryClient` that automatically adds `?$sid={session_id}&$txn={txn_id}` to every request. Works with all CRUD methods: `find`, `get_by_id`, `create`, `create_many`, `update_by_id`, `update_many`, `delete_by_id`, `delete_many`, `link`, `unlink`, `count`.
 
 ```rust
 let svc = mg.service("my_table").with_txn(&session.id, &txn.id);

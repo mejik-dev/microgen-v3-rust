@@ -14,7 +14,7 @@ use reqwest::Client;
 /// ## Transaction support
 ///
 /// Call [`QueryClient::with_txn`] to return a copy of this client that
-/// automatically appends `?sid=…&txn=…` to every request URL, allowing
+/// automatically appends `?$sid=…&$txn=…` to every request URL, allowing
 /// all subsequent CRUD operations to run inside a database transaction.
 ///
 /// > **Note:** Creating a session / transaction, committing, and aborting
@@ -84,7 +84,7 @@ impl QueryClient {
     /// inside the given session + transaction.
     ///
     /// Every subsequent `find`, `create`, `update_by_id`, … call will
-    /// automatically append `?sid={session_id}&txn={txn_id}` to the URL.
+    /// automatically append `?$sid={session_id}&$txn={txn_id}` to the URL.
     #[must_use]
     pub fn with_txn(&self, session_id: &str, txn_id: &str) -> Self {
         Self {
@@ -97,24 +97,24 @@ impl QueryClient {
         }
     }
 
-    /// Append `?sid=…&txn=…` to `url` when a session/transaction context is active.
+    /// Append `?$sid=…&$txn=…` to `url` when a session/transaction context is active.
     fn append_txn_params(&self, url: &str) -> String {
         if let (Some(sid), Some(txn)) = (&self.session_id, &self.transaction_id) {
             let sep = if url.contains('?') { "&" } else { "?" };
-            format!("{url}{sep}sid={sid}&txn={txn}")
+            format!("{url}{sep}$sid={sid}&$txn={txn}")
         } else {
             url.to_string()
         }
     }
 
-    /// Insert `sid` / `txn` into a query-parameter map when a
+    /// Insert `$sid` / `$txn` into a query-parameter map when a
     /// session/transaction context is active.
     fn add_txn_to_map(&self, map: &mut serde_json::Map<String, serde_json::Value>) {
         if let Some(ref sid) = self.session_id {
-            map.insert("sid".into(), serde_json::json!(sid));
+            map.insert("$sid".into(), serde_json::json!(sid));
         }
         if let Some(ref txn) = self.transaction_id {
-            map.insert("txn".into(), serde_json::json!(txn));
+            map.insert("$txn".into(), serde_json::json!(txn));
         }
     }
 
@@ -499,5 +499,35 @@ impl QueryClient {
         let resp = check_status(resp).await?;
         let data: crate::types::MicrogenCount = resp.json().await?;
         Ok(MicrogenCountResponse { data: Some(data) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn query_client() -> QueryClient {
+        QueryClient::new(
+            Client::new(),
+            "items",
+            "http://localhost/api",
+            HeaderMap::new(),
+        )
+    }
+
+    #[test]
+    fn transaction_params_use_dollar_prefixed_names() {
+        let client = query_client().with_txn("session-1", "7");
+        assert_eq!(
+            client.append_txn_params("http://localhost/api/items"),
+            "http://localhost/api/items?$sid=session-1&$txn=7"
+        );
+
+        let mut query = serde_json::Map::new();
+        client.add_txn_to_map(&mut query);
+        assert_eq!(query.get("$sid"), Some(&serde_json::json!("session-1")));
+        assert_eq!(query.get("$txn"), Some(&serde_json::json!("7")));
+        assert!(!query.contains_key("sid"));
+        assert!(!query.contains_key("txn"));
     }
 }
