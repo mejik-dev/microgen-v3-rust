@@ -206,7 +206,7 @@ use microgen_v3_sdk_rust::{MicrogenClient, MicrogenClientOptions};
 
 #[tokio::main]
 async fn main() {
-    let mg = MicrogenClient::new(MicrogenClientOptions::new("your-api-key"));
+    let mg = MicrogenClient::new(MicrogenClientOptions::new("your-api-key")).unwrap();
 
     // 0. Authenticate — token stored & shared automatically
     mg.auth
@@ -240,6 +240,9 @@ async fn main() {
     // 4. Commit or abort
     mg.transactions.commit(&session, &txn).await.unwrap();
     // or: mg.transactions.abort(&session, &txn).await.unwrap();
+
+    // 5. Close the session when it is no longer needed
+    mg.transactions.close_session(&session).await.unwrap();
 }
 ```
 
@@ -249,9 +252,10 @@ async fn main() {
 |---|---|
 | `.create_session()` | Create a new session (timeout ~1 minute) |
 | `.create_transaction(&session)` | Create a transaction in a session |
-| `.get_transactions(&session)` | List all transactions in a session |
+| `.get_transaction_status(&session)` | Get the current transaction and status |
 | `.commit(&session, &txn)` | Commit a transaction |
 | `.abort(&session, &txn)` | Abort / rollback a transaction |
+| `.close_session(&session)` | Close and destroy a session |
 
 ### With-txn wrapper
 

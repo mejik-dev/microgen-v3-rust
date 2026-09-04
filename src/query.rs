@@ -516,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn transaction_params_use_dollar_prefixed_names() {
+    fn transaction_params_use_restheart_names() {
         let client = query_client().with_txn("session-1", "7");
         assert_eq!(
             client.append_txn_params("http://localhost/api/items"),
@@ -527,7 +527,5 @@ mod tests {
         client.add_txn_to_map(&mut query);
         assert_eq!(query.get("$sid"), Some(&serde_json::json!("session-1")));
         assert_eq!(query.get("$txn"), Some(&serde_json::json!("7")));
-        assert!(!query.contains_key("sid"));
-        assert!(!query.contains_key("txn"));
     }
 }

@@ -19,6 +19,7 @@
 //!    any service client to append `?$sid=…&$txn=…` to every request.
 //! 5. **Commit or abort** – [`TransactionClient::commit`] or
 //!    [`TransactionClient::abort`].
+//! 6. **Close the session** – [`TransactionClient::close_session`].
 //!
 //! > **Note:** Sessions have a server-side timeout of roughly **one minute**.
 //!
@@ -53,6 +54,7 @@
 //!
 //! // 4. Commit or abort
 //! mg.transactions.commit(&session, &txn).await.unwrap();
+//! mg.transactions.close_session(&session).await.unwrap();
 //! # }
 //! ```
 
@@ -79,7 +81,10 @@ pub struct Session {
 /// or aborted through [`TransactionClient::commit`] / [`TransactionClient::abort`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transaction {
+    /// Numeric transaction identifier returned by the server.
     pub id: String,
+    /// Server-reported transaction state, for example `IN`.
+    pub status: String,
 }
 
 // ──────────────────────────────────────────────
@@ -87,14 +92,21 @@ pub struct Transaction {
 // ──────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct CreateSessionResponse {
-    session_id: String,
+    sid: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct CreateTxnResponse {
-    txn: i64,
+    #[serde(rename = "_id", alias = "id")]
+    id: i64,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransactionStatusResponse {
+    current_txn: Option<CreateTxnResponse>,
 }
 
 // ──────────────────────────────────────────────
@@ -183,6 +195,10 @@ impl TransactionClient {
         format!("{}/_txn/sessions/{}/txns", self.base_url, session.id)
     }
 
+    fn session_by_id_url(&self, session: &Session) -> String {
+        format!("{}/_txn/sessions/{}", self.base_url, session.id)
+    }
+
     fn txn_url(&self, session: &Session, txn: &Transaction) -> String {
         format!(
             "{}/_txn/sessions/{}/txns/{}",
@@ -217,9 +233,22 @@ impl TransactionClient {
             .await?;
         let resp = check_status(resp).await?;
         let data: CreateSessionResponse = resp.json().await?;
-        Ok(Session {
-            id: data.session_id,
-        })
+        Ok(Session { id: data.sid })
+    }
+
+    /// Close and destroy `session` on the server.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::MicrogenError::Api`] if the server returns a non-success status,
+    /// or [`crate::error::MicrogenError::Request`] on network failures.
+    pub async fn close_session(&self, session: &Session) -> Result<()> {
+        let resp = self
+            .with_auth(self.client.delete(self.session_by_id_url(session)))?
+            .send()
+            .await?;
+        check_status(resp).await?;
+        Ok(())
     }
 
     /// Create a new transaction inside `session`.
@@ -238,11 +267,12 @@ impl TransactionClient {
         let resp = check_status(resp).await?;
         let data: CreateTxnResponse = resp.json().await?;
         Ok(Transaction {
-            id: data.txn.to_string(),
+            id: data.id.to_string(),
+            status: data.status,
         })
     }
 
-    /// List all transactions inside `session`.
+    /// Return the current transaction and its status for `session`.
     ///
     /// Requires authentication — uses the stored Bearer token.
     /// # Errors
@@ -250,21 +280,18 @@ impl TransactionClient {
     /// Returns [`crate::error::MicrogenError::Api`] if the server returns a non-success status,
     /// [`crate::error::MicrogenError::Request`] on network failures,
     /// [`crate::error::MicrogenError::Serde`] on JSON parse errors.
-    pub async fn get_transactions(&self, session: &Session) -> Result<Vec<Transaction>> {
+    pub async fn get_transaction_status(&self, session: &Session) -> Result<Option<Transaction>> {
         let resp = self
             .with_auth(self.client.get(self.txns_url(session)))?
             .send()
             .await?;
         let resp = check_status(resp).await?;
 
-        // The API returns an array of `{ txn: number }`.
-        let data: Vec<CreateTxnResponse> = resp.json().await?;
-        Ok(data
-            .into_iter()
-            .map(|t| Transaction {
-                id: t.txn.to_string(),
-            })
-            .collect())
+        let data: TransactionStatusResponse = resp.json().await?;
+        Ok(data.current_txn.map(|txn| Transaction {
+            id: txn.id.to_string(),
+            status: txn.status,
+        }))
     }
 
     /// Commit a transaction, making its changes permanent.
@@ -316,5 +343,38 @@ mod tests {
         assert!(
             matches!(error, MicrogenError::InvalidArgument(message) if message.contains("authentication token is required"))
         );
+    }
+
+    #[test]
+    fn create_session_response_deserializes_sid() {
+        let response: CreateSessionResponse = serde_json::from_str(r#"{"sid":"abc123"}"#).unwrap();
+
+        assert_eq!(response.sid, "abc123");
+    }
+
+    #[test]
+    fn create_transaction_response_deserializes_id_and_status() {
+        let response: CreateTxnResponse =
+            serde_json::from_str(r#"{"_id":1,"status":"IN"}"#).unwrap();
+
+        assert_eq!((response.id, response.status.as_str()), (1, "IN"));
+    }
+
+    #[test]
+    fn transaction_status_response_deserializes_current_transaction() {
+        let response: TransactionStatusResponse = serde_json::from_str(
+            r#"{"currentTxn":{"_id":1,"status":"IN","startedAt":"2026-09-04T09:50:57Z"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(response.current_txn.map(|txn| txn.id), Some(1));
+    }
+
+    #[test]
+    fn create_transaction_response_accepts_documented_id_alias() {
+        let response: CreateTxnResponse =
+            serde_json::from_str(r#"{"id":1,"status":"IN"}"#).unwrap();
+
+        assert_eq!(response.id, 1);
     }
 }

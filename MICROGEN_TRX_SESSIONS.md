@@ -69,7 +69,7 @@ curl --location 'https://database-query.stagingv3.microgen.id/api/v1/c1d04e5e-86
 use microgen_v3_sdk_rust::{MicrogenClient, MicrogenClientOptions};
 
 async fn example() {
-    let mg = MicrogenClient::new(MicrogenClientOptions::new("your-api-key"));
+    let mg = MicrogenClient::new(MicrogenClientOptions::new("your-api-key")).unwrap();
 
     // 0. Authenticate first — token is stored & shared automatically
     mg.auth.login::<serde_json::Value>(&serde_json::json!({
@@ -103,5 +103,6 @@ async fn example() {
     // 4. Commit or abort
     mg.transactions.commit(&session, &txn).await.unwrap();
     // or: mg.transactions.abort(&session, &txn).await.unwrap();
+    mg.transactions.close_session(&session).await.unwrap();
 }
 ```

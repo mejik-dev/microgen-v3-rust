@@ -81,6 +81,7 @@
 //!
 //! // 4. Commit — or mg.transactions.abort(&session, &txn) to roll back
 //! mg.transactions.commit(&session, &txn).await.unwrap();
+//! mg.transactions.close_session(&session).await.unwrap();
 //! println!("committed!");
 //! # }
 //! ```
